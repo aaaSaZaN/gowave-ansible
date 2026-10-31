@@ -1,0 +1,11 @@
+---
+# Require explicit tags so repeat runs cannot silently select a new release.
+gowave_node_version: ""
+gowave_node_core_version: ""
+gowave_node_release_repository: aaaSaZaN/gowave-node
+gowave_node_core_repository: XTLS/Xray-core
+gowave_node_install_dir: /opt/gowave-node
+gowave_node_secret_key: ""
+gowave_node_port: 3000
+# Additional environment variables; managed paths, secret, and port cannot be overridden.
+gowave_node_environment: {}

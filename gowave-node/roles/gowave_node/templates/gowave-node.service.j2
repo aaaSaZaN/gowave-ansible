@@ -1,0 +1,22 @@
+{{ ansible_managed | comment }}
+[Unit]
+Description=GoWave node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+{# Match install.sh: Xray needs low ports, nftables, and panel-referenced files/sockets. #}
+User=root
+Group=root
+WorkingDirectory={{ gowave_node_install_dir }}
+ExecStart={{ gowave_node_install_dir }}/gowave-node
+RuntimeDirectory=gowave-node
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

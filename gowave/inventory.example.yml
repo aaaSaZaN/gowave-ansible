@@ -1,0 +1,15 @@
+---
+all:
+  children:
+    gowave:
+      hosts:
+        panel:
+          ansible_host: 192.0.2.10
+          ansible_user: deploy
+      vars:
+        # Set an existing release tag before deploying, for example vX.Y.Z.
+        gowave_version: ""
+        gowave_panel_domain: panel.example.com
+        gowave_front_end_domain: https://panel.example.com
+        gowave_sub_public_domain: panel.example.com/api/sub
+        gowave_app_secret: "{{ vault_gowave_app_secret }}"

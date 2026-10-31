@@ -1,0 +1,8 @@
+[project]
+name = "gowave-node-ansible"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "ansible-core==2.21.5",
+    "ansible-lint==26.10.1",
+]

@@ -1,0 +1,6 @@
+---
+- name: Deploy GoWave
+  hosts: gowave
+  become: true
+  roles:
+    - gowave

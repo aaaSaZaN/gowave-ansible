@@ -1,0 +1,14 @@
+---
+all:
+  children:
+    gowave_node:
+      hosts:
+        node:
+          ansible_host: 192.0.2.20
+          ansible_user: deploy
+      vars:
+        # Set existing release tags, including the v prefix, before deploying.
+        gowave_node_version: ""
+        gowave_node_core_version: ""
+        gowave_node_port: 3000
+        gowave_node_secret_key: "{{ vault_gowave_node_secret_key }}"

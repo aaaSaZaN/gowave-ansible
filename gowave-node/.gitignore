@@ -1,0 +1,4 @@
+.venv/
+.ansible/
+*.local.yml
+*.local.yaml

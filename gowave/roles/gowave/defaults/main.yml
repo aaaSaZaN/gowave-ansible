@@ -1,0 +1,16 @@
+---
+# Explicit tags make repeat runs predictable; latest/dev are intentionally excluded.
+gowave_version: ""
+gowave_release_repository: aaaSaZaN/gowave
+gowave_install_dir: /opt/gowave
+gowave_app_secret: ""
+gowave_app_port: 3000
+gowave_panel_domain: localhost:3000
+gowave_panel_base_path: ""
+gowave_front_end_domain: "*"
+gowave_sub_public_domain: localhost:3000/api/sub
+gowave_db_driver: sqlite
+gowave_database_url: gowave.db
+# Extra environment variables, such as notification settings or metrics credentials.
+# These override the defaults rendered by this role, except APP_SECRET/APP_HOST/APP_PORT.
+gowave_environment: {}

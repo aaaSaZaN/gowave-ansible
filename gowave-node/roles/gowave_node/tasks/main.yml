@@ -1,0 +1,227 @@
+---
+- name: Validate deployment settings
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['system'] == 'Linux'
+      - ansible_facts['service_mgr'] == 'systemd'
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+      - ansible_facts['os_family'] in ['Debian', 'RedHat', 'Archlinux']
+      - gowave_node_version is match('^v[0-9]+\.[0-9]+\.[0-9]+(?:[.+-][a-zA-Z0-9.-]+)?\Z')
+      - gowave_node_core_version is match('^v[0-9]+\.[0-9]+\.[0-9]+(?:[.+-][a-zA-Z0-9.-]+)?\Z')
+      - gowave_node_release_repository is match('^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+\Z')
+      - gowave_node_core_repository is match('^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+\Z')
+      - gowave_node_install_dir is match('^/(opt|srv)/[a-zA-Z0-9_-][a-zA-Z0-9_/-]*\Z')
+      - "'..' not in gowave_node_install_dir.split('/')"
+      - not gowave_node_install_dir.endswith('/')
+      - gowave_node_port | string is match('^[0-9]+\Z')
+      - gowave_node_port | int > 0
+      - gowave_node_port | int < 65536
+      - gowave_node_environment is mapping
+      - >-
+        gowave_node_environment.keys() | intersect([
+          'SECRET_KEY', 'NODE_PORT', 'GOWAVE_NODE_RUNTIME_DIR',
+          'XRAY_CORE_PATH', 'XRAY_LOCATION_ASSET', 'ASN_INDEX_PATH'
+        ]) | length == 0
+    fail_msg: >-
+      Use a Debian, RedHat, or Archlinux family Linux amd64/arm64 host with systemd,
+      explicit node and Xray vX.Y.Z release tags, and valid deployment settings.
+
+- name: Validate panel secret
+  ansible.builtin.assert:
+    that:
+      - gowave_node_secret_key is string
+      - gowave_node_secret_key is match('^[A-Za-z0-9+/]+={0,2}\Z')
+    fail_msg: Set gowave_node_secret_key to the base64 SECRET_KEY from the panel node settings using Ansible Vault.
+  no_log: true
+
+- name: Validate extra environment variables
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[A-Z][A-Z0-9_]*\Z')
+      - item.value is string or item.value is number
+      - item.value is not boolean
+      - item.value | string is not search('[\x00\r\n]')
+    fail_msg: Environment keys must be uppercase identifiers and values must be single-line strings or numbers without NUL bytes.
+  loop: "{{ gowave_node_environment | dict2items }}"
+  no_log: true
+
+- name: Finish input validation in check mode
+  ansible.builtin.meta: end_host
+  when: ansible_check_mode
+
+- name: Install runtime prerequisites
+  ansible.builtin.package:
+    name:
+      - ca-certificates
+      - unzip
+      - nftables
+      - "{{ 'iproute' if ansible_facts['os_family'] == 'RedHat' else 'iproute2' }}"
+    state: present
+
+- name: Create installation and CLI directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ gowave_node_install_dir }}"
+    - /usr/local/bin
+
+- name: Create root-controlled artifact cache
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /var/cache/gowave-node-ansible
+    - /var/cache/gowave-node-ansible/core
+
+- name: Set release download locations
+  ansible.builtin.set_fact:
+    gowave_node_download_url: "https://github.com/{{ gowave_node_release_repository }}/releases/download/{{ gowave_node_version }}"
+    gowave_node_binary_asset: "gowave-node-linux-{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+    gowave_node_core_asset: "Xray-linux-{{ {'x86_64': '64', 'aarch64': 'arm64-v8a'}[ansible_facts['architecture']] }}.zip"
+
+- name: Download checksum-verified node artifacts
+  ansible.builtin.get_url:
+    url: "{{ gowave_node_download_url }}/{{ item }}"
+    dest: "/var/cache/gowave-node-ansible/{{ item }}"
+    checksum: "sha256:{{ gowave_node_download_url }}/checksums.txt"
+    owner: root
+    group: root
+    mode: "0600"
+    timeout: 120
+  loop:
+    - "{{ gowave_node_binary_asset }}"
+    - asn-prefixes.zip
+
+# Xray publishes a GitHub asset digest rather than the node's checksum manifest format.
+- name: Fetch pinned Xray release metadata
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/{{ gowave_node_core_repository }}/releases/tags/{{ gowave_node_core_version }}"
+    headers:
+      Accept: application/vnd.github+json
+    return_content: true
+    timeout: 60
+  register: gowave_node_core_release
+
+- name: Select Xray archive
+  ansible.builtin.set_fact:
+    gowave_node_core_assets: "{{ gowave_node_core_release.json.assets | selectattr('name', 'equalto', gowave_node_core_asset) | list }}"
+
+- name: Require a published Xray SHA-256 digest
+  ansible.builtin.assert:
+    that:
+      - gowave_node_core_assets | length == 1
+      - gowave_node_core_assets[0].digest | default('') is match('^sha256:[a-fA-F0-9]{64}\Z')
+    fail_msg: The selected Xray release must contain the architecture archive with a published SHA-256 asset digest.
+
+- name: Download checksum-verified Xray archive
+  ansible.builtin.get_url:
+    url: "https://github.com/{{ gowave_node_core_repository }}/releases/download/{{ gowave_node_core_version }}/{{ gowave_node_core_asset }}"
+    dest: "/var/cache/gowave-node-ansible/{{ gowave_node_core_asset }}"
+    checksum: "{{ gowave_node_core_assets[0].digest }}"
+    owner: root
+    group: root
+    mode: "0600"
+    timeout: 120
+
+- name: Extract verified Xray executable and geodata
+  ansible.builtin.unarchive:
+    src: "/var/cache/gowave-node-ansible/{{ gowave_node_core_asset }}"
+    dest: /var/cache/gowave-node-ansible/core
+    remote_src: true
+    include:
+      - xray
+      - geoip.dat
+      - geosite.dat
+    owner: root
+    group: root
+
+- name: Install executables atomically
+  ansible.builtin.copy:
+    src: "/var/cache/gowave-node-ansible/{{ item.src }}"
+    dest: "{{ gowave_node_install_dir }}/{{ item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - src: "{{ gowave_node_binary_asset }}"
+      dest: gowave-node
+    - src: core/xray
+      dest: rw-core
+    # Keep core reset from restoring a different stock version after panel updates.
+    - src: core/xray
+      dest: rw-core.stock
+  notify: Restart GoWave node
+
+- name: Install ASN index and geodata atomically
+  ansible.builtin.copy:
+    src: "/var/cache/gowave-node-ansible/{{ item.src }}"
+    dest: "{{ gowave_node_install_dir }}/{{ item.dest }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - src: asn-prefixes.zip
+      dest: asn-prefixes.zip
+    - src: core/geoip.dat
+      dest: geoip.dat
+    - src: core/geosite.dat
+      dest: geosite.dat
+  notify: Restart GoWave node
+
+- name: Write node configuration
+  ansible.builtin.template:
+    src: env.j2
+    dest: "{{ gowave_node_install_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  diff: false
+  notify: Restart GoWave node
+
+- name: Install systemd unit
+  ansible.builtin.template:
+    src: gowave-node.service.j2
+    dest: /etc/systemd/system/gowave-node.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart GoWave node
+
+- name: Install CLI link
+  ansible.builtin.file:
+    src: "{{ gowave_node_install_dir }}/gowave-node"
+    dest: /usr/local/bin/gowave-node
+    state: link
+    owner: root
+    group: root
+    force: true
+
+- name: Apply pending service changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start node
+  ansible.builtin.systemd_service:
+    name: gowave-node.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# A new node has no Xray configuration until the panel sends /node/xray/start.
+- name: Wait for management daemon health
+  ansible.builtin.command:
+    argv:
+      - "{{ gowave_node_install_dir }}/gowave-node"
+      - status
+      - --wait-running
+    chdir: "{{ gowave_node_install_dir }}"
+  changed_when: false
